@@ -222,7 +222,7 @@ cudaError_t austin_berndt_moulton(std::vector<float> a, std::vector<float> b, st
 
 	int pLength = r.size() / nOfParts;
 	int remainder = r.size() - (pLength * nOfParts);
-	int threadsPerBlock = 1024;
+	int threadsPerBlock = 128;
 	int numBlocks = (nOfParts + threadsPerBlock - 1) / threadsPerBlock;
 
 	CUDA_CALL(cudaSetDevice(0));
