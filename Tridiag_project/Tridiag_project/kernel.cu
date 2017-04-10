@@ -359,30 +359,66 @@ void ABM_on_CPU(std::vector<float> a, std::vector<float> b, std::vector<float> c
 }
 
 // TODO <-------------------
-void reduced_method() {
-
+std::vector<float> compute_rest(std::vector<float> r, std::vector<float> y, float d0, float dn, float h) {
+	int size = y.size();
+	std::vector<float> d(size);
+	d[0] = d0;
+	d[size - 1] = dn;
+	float mu1 = 3 / h, dp4 = 0.25;
+	for (int i = 1, k = 0; i < size - 3; i+=2, k++)
+	{
+		d[i + 1] = r[k];
+		d[i] = (mu1 * (y[i + 1] - y[i - 1]) - d[i - 1] - d[i + 1]) * dp4;
+	}
+	d[size - 2] = (mu1 * (y[size - 1] - y[size - 3]) - d[size - 3] - d[size - 1]) * dp4;
+	return d;
 }
 
-void TorokMakeTridiag(std::vector<float> y, float h, float d0, float dn, std::vector<float> &r)
+void TorokMakeTridiag(std::vector<float> y, float h, float d0, float dn, std::vector<float> &b, std::vector<float> &r)
 {
 	// std::vector<float> r((y.size() / 2) - 1);
+	float mu1 = 3 / h;
+	float mu2 = 4 * mu1;
+	int j = 2;
 	for (int i = 0; i < r.size() - 1; i++)
 	{
-		int j = (i + 1) * 2;
-		r[i] = 3 / h * (y[j + 2] - y[j - 2]) - 12 / h * (y[j + 1] - y[j - 1]);
+		r[i] = mu1 * (y[j + 2] - y[j - 2]) - mu2 * (y[j + 1] - y[j - 1]);
+		b[i] = -14;
+		j += 2;
 	}
 	r[0] -= d0;
-	int j = r.size() * 2;
+	j = r.size() * 2;
 	int eta;
 	int tau;
 	if (y.size() % 2 == 0) {
 		eta = -4;
 		tau = 0;
+		b[r.size() - 1] = -15;
 	} else {
 		eta = 1;
 		tau = 2;
+		b[r.size() - 1] = -14;
 	}
-	r[r.size() - 1] = 3 / h * (y[j + tau] - y[j - 2]) - 12 / h * (y[j + 1] - y[j - 1]) - eta * dn;
+	r[r.size() - 1] = mu1 * (y[j + tau] - y[j - 2]) - mu2 * (y[j + 1] - y[j - 1]) - eta * dn;
+}
+
+void CPU_Torok(std::vector<float> &b, std::vector<float> &r, std::vector<float> F, float d0, float dr, float h) {
+	//float d0 = 1, dr = -1;
+	//float x1 = -4, xr = 4;
+	//std::vector<float> X(r.size() + 2);
+	//std::vector<float> F(r.size() + 2);
+	//float h = (xr - x1) / (X.size() - 1);
+	//// Data X, F:
+	//X[0] = x1;
+	//F[0] = 1 / (1 + 4 * X[0] * X[0]);
+	//for (int i = 1; i < X.size(); i++)
+	//{
+	//	X[i] = X[i - 1] + h; F[i] = 1 / (1 + 4 * X[i] * X[i]);
+	//}
+	//TorokMakeTridiag(F, h, d0, dr, b, r);
+
+	LU_CPU_equi(b, r, 0, r.size());
+	compute_rest(r, F, d0, dr, h);
 }
 
 int main()
@@ -393,7 +429,7 @@ int main()
 	std::vector<float> c(matrixSize);
 	std::vector<float> r(matrixSize);
 	//float d1 = 1, dr = -1;
-	//float x1 = -4, xr = 4;
+	//float x1 = -400, xr = 400;
 	//std::vector<float> X(matrixSize + 2);
 	//std::vector<float> F(matrixSize + 2);
 	//float h = (xr - x1) / (X.size() - 1);
@@ -405,6 +441,7 @@ int main()
 	//	X[i] = X[i - 1] + h; F[i] = 1 / (1 + 4 * X[i] * X[i]);
 	//}
 	//deBoorMakeTridiag(X, F, d1, dr, a, b, c, r);
+
 	srand(time(NULL));
 	for (size_t i = 0; i < matrixSize; i++)
 	{
@@ -421,24 +458,39 @@ int main()
 	b2 = b;
 	c2 = c;
 	r2 = r;
+	//std::vector<float> b3((F.size() / 2) - 1);
+	//std::vector<float> r3((F.size() / 2) - 1);
 
-	cudaEvent_t start, stop_CPU, stop_GPU;
+
+	//TorokMakeTridiag(F, h, d1, dr, b3, r3);
+
+	cudaEvent_t start, stop_CPU, stop_Torok, stop_GPU;
 	float time1 = 0.0;
 	float time2 = 0.0;
+	float time3 = 0.0;
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop_CPU);
+	cudaEventCreate(&stop_Torok);
 	cudaEventCreate(&stop_GPU);
 
 	cudaEventRecord(start);
 	cudaEventSynchronize(start);
 
 	// computing on CPU
-	LU_CPU(a2, b2, c2, r2, 0, r.size());
+	LU_CPU(a2, b2, c2, r2, 0, r2.size());
 	//ABM_on_CPU(a2, b2, c2, r2, 1024);
 
 	cudaEventRecord(stop_CPU);
 	cudaEventSynchronize(stop_CPU);
 	cudaEventElapsedTime(&time1, start, stop_CPU);
+
+	// reduced computing on CPU
+	//LU_CPU_equi(b3, r3, 0, r3.size());
+	//r3 = compute_rest(r3, F, d1, dr, h);
+
+	cudaEventRecord(stop_Torok);
+	cudaEventSynchronize(stop_Torok);
+	cudaEventElapsedTime(&time2, stop_CPU, stop_Torok);
 
 	// computing on GPU
 	cudaError_t cudaStatus = austin_berndt_moulton(a, b, c, r, 1024);
@@ -449,14 +501,19 @@ int main()
 
 	cudaEventRecord(stop_GPU);
 	cudaEventSynchronize(stop_GPU);
-	cudaEventElapsedTime(&time2, stop_CPU, stop_GPU);
+	cudaEventElapsedTime(&time3, stop_Torok, stop_GPU);
 
 	std::cout << "CPU time: " << time1 << " ms" << std::endl;
-	std::cout << "my GPU time: " << time2 << " ms" << std::endl << std::endl;
+	std::cout << "reduced CPU time: " << time2 << " ms" << std::endl;
+	std::cout << "my GPU time: " << time3 << " ms" << std::endl << std::endl;
 	// std::cout.precision(15);
 	for (int i = 0; i < r.size(); i++)
 	{
-		float diff = r[i] - r2[i];
+		if (r[i] == r[i])
+		{
+			std::cout << i << " = " << r[i] << std::endl;
+		}
+		float diff = r2[i] - r[i];
 		if (diff > 0.00000000000001) { // 10^-15
 			std::cout << "BACHA! rozdiel v " << i << " je presne " << diff << std::endl;
 		}
