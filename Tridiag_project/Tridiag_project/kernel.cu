@@ -80,15 +80,24 @@ void LU_CPU(std::vector<float> a, std::vector<float> b, std::vector<float> c, st
 	}
 }
 
-void LU_CPU_equi(std::vector<float> b, std::vector<float> &r, int from, int to)
+// ======================================================================================================================================================== LU CPU EQUI
+void LU_CPU_equi(std::vector<float> &r, int from, int to, bool last)
 {
 	std::vector<float> a(to - from);
-	std::vector<float> c(to - from);
+	std::vector<float> b(to - from);
+	bool evenAndLast = (r.size() % 2 == 0 && last);
 	for (int i = from + 1, j = 1; i < to; i++, j++)
 	{
 		a[j] = 1 / b[j - 1];
-		b[i] = b[i] - a[j];
 		r[i] = r[i] - (a[j] * r[i - 1]);
+		if (i == to - 1 && evenAndLast)
+		{
+			b[j] = -15 - a[j];
+		}
+		else
+		{
+			b[j] = -14 - a[j];
+		}
 	}
 	r[to - 1] = r[to - 1] / b[to - 1];
 	for (int i = to - 2, j = to - from - 2; i >= from; i--, j--)
@@ -97,7 +106,7 @@ void LU_CPU_equi(std::vector<float> b, std::vector<float> &r, int from, int to)
 	}
 }
 
-__global__ void partitioning(float* a, float* b, float* c, float* r, float* Va, float* Vb, float* Vc, float* Vr, int* Vindex, int pLength, int size, int Vsize, int remainder) {
+__global__ void partitioning(float* a, float* b, float* c, float* r, float* Va, float* Vb, float* Vc, float* Vr, int* Vindex, int pLength, int Vsize, int remainder) {
 	int idx = blockDim.x * blockIdx.x + threadIdx.x;
 	int i = idx * 2 + 1;
 	int myLength = pLength;
@@ -132,10 +141,15 @@ __global__ void partitioning(float* a, float* b, float* c, float* r, float* Va, 
 		int jInit = j;
 		for (int k = 2; k < myLength; k++) /* && j < size*/
 		{
-			float alpha = Vbi / a[j + k];
-			Vri -= alpha * r[j + k];
-			Vbi = Vci - alpha * b[j + k];
-			Vci = -alpha * c[j + k];
+			float alpha = a[j + k] / Vbi;
+			Vai = -Vai * alpha;
+			Vbi = b[j + k] - alpha * Vci;
+			Vci = c[j + k];
+			Vri = r[j + k] - alpha * Vri;
+			// float alpha = Vbi / a[j + k];
+			// Vri -= alpha * r[j + k];
+			// Vbi = Vci - alpha * b[j + k];
+			// Vci = -alpha * c[j + k];
 		}
 		Va[i] = Vai;
 		Vb[i] = Vbi;
@@ -148,10 +162,11 @@ __global__ void partitioning(float* a, float* b, float* c, float* r, float* Va, 
 		Vri = r[j + myLength - 2];
 		for (int k = myLength - 3; k >= 0; k--)
 		{
-			float beta = Vbi / c[j + k];
-			Vri = Vri - beta * r[j + k];
-			Vbi = Vai - beta * b[j + k];
-			Vai = -beta * a[j + k];
+			float beta = c[j + k] / Vbi;
+			Vri = r[j + k] - beta * Vri;
+			Vbi = b[j + k] - beta * Vai;
+			Vai = a[j + k];
+			Vci = -Vci * beta;
 		}
 		Va[i] = Vai;
 		Vb[i] = Vbi;
@@ -244,7 +259,7 @@ cudaError_t austin_berndt_moulton(std::vector<float> a, std::vector<float> b, st
 
 	CUDA_CALL(cudaSetDevice(0));
 
-	partitioning <<<numBlocks, threadsPerBlock>>> (dev_a, dev_b, dev_c, dev_r, dev_Va, dev_Vb, dev_Vc, dev_Vr, dev_Vidx, pLength, r.size(), Vr.size(), remainder);
+	partitioning <<<numBlocks, threadsPerBlock>>> (dev_a, dev_b, dev_c, dev_r, dev_Va, dev_Vb, dev_Vc, dev_Vr, dev_Vidx, pLength, Vr.size(), remainder);
 	CUDA_CALL(cudaGetLastError());
 	CUDA_CALL(cudaDeviceSynchronize());
 
@@ -257,8 +272,7 @@ cudaError_t austin_berndt_moulton(std::vector<float> a, std::vector<float> b, st
 	CUDA_CALL(cudaMemcpy(&Vc[0], dev_Vc, Vsize * sizeof(float), cudaMemcpyDeviceToHost));
 	CUDA_CALL(cudaMemcpy(&Vr[0], dev_Vr, Vsize * sizeof(float), cudaMemcpyDeviceToHost));
 	LU_CPU(Va, Vb, Vc, Vr, 0, Vsize);
-	CUDA_CALL(cudaMemcpy(dev_Vr, &Vr[0], Vr.size() * sizeof(float), cudaMemcpyHostToDevice));
-
+	CUDA_CALL(cudaMemcpy(dev_Vr, &Vr[0], Vsize * sizeof(float), cudaMemcpyHostToDevice));
 	/*LU_tridiag<<<1, 1>>>(dev_Va, dev_Vb, dev_Vc, dev_Vr, 0, Vsize);
 	CUDA_CALL(cudaGetLastError());
 	CUDA_CALL(cudaDeviceSynchronize());*/
@@ -290,7 +304,7 @@ cudaError_t austin_berndt_moulton(std::vector<float> a, std::vector<float> b, st
 	std::cout << "sequen time: " << time4 << " ms" << std::endl;
 	std::cout << "fiinal time: " << time5 << " ms" << std::endl;
 	std::cout << "rescpy time: " << time6 << " ms" << std::endl;
-	std::cout << "sum time: " << time1 + time2 + time3 + time4 + time5 + time6 << " ms" << std::endl;
+	std::cout << "sum time: " << time3 + time4 + time5 << " ms" << std::endl;
 	std::cout << "============================" << std::endl;
 
 	return err;
@@ -358,7 +372,7 @@ void ABM_on_CPU(std::vector<float> a, std::vector<float> b, std::vector<float> c
 	}
 }
 
-// TODO <-------------------
+// ==================================================================================================================================================================== REST
 std::vector<float> compute_rest(std::vector<float> r, std::vector<float> y, float d0, float dn, float h) {
 	int size = y.size();
 	std::vector<float> d(size);
@@ -374,7 +388,8 @@ std::vector<float> compute_rest(std::vector<float> r, std::vector<float> y, floa
 	return d;
 }
 
-void TorokMakeTridiag(std::vector<float> y, float h, float d0, float dn, std::vector<float> &b, std::vector<float> &r)
+// ===================================================================================================================================================================== TOROK MAKE TRIDIAG
+void TorokMakeTridiag(std::vector<float> y, float h, float d0, float dn, /*std::vector<float> &b,*/ std::vector<float> &r)
 {
 	// std::vector<float> r((y.size() / 2) - 1);
 	float mu1 = 3 / h;
@@ -383,7 +398,7 @@ void TorokMakeTridiag(std::vector<float> y, float h, float d0, float dn, std::ve
 	for (int i = 0; i < r.size() - 1; i++)
 	{
 		r[i] = mu1 * (y[j + 2] - y[j - 2]) - mu2 * (y[j + 1] - y[j - 1]);
-		b[i] = -14;
+		//b[i] = -14;
 		j += 2;
 	}
 	r[0] -= d0;
@@ -393,63 +408,44 @@ void TorokMakeTridiag(std::vector<float> y, float h, float d0, float dn, std::ve
 	if (y.size() % 2 == 0) {
 		eta = -4;
 		tau = 0;
-		b[r.size() - 1] = -15;
+		//b[r.size() - 1] = -15;
 	} else {
 		eta = 1;
 		tau = 2;
-		b[r.size() - 1] = -14;
+		//b[r.size() - 1] = -14;
 	}
 	r[r.size() - 1] = mu1 * (y[j + tau] - y[j - 2]) - mu2 * (y[j + 1] - y[j - 1]) - eta * dn;
 }
 
-void CPU_Torok(std::vector<float> &b, std::vector<float> &r, std::vector<float> F, float d0, float dr, float h) {
-	//float d0 = 1, dr = -1;
-	//float x1 = -4, xr = 4;
-	//std::vector<float> X(r.size() + 2);
-	//std::vector<float> F(r.size() + 2);
-	//float h = (xr - x1) / (X.size() - 1);
-	//// Data X, F:
-	//X[0] = x1;
-	//F[0] = 1 / (1 + 4 * X[0] * X[0]);
-	//for (int i = 1; i < X.size(); i++)
-	//{
-	//	X[i] = X[i - 1] + h; F[i] = 1 / (1 + 4 * X[i] * X[i]);
-	//}
-	//TorokMakeTridiag(F, h, d0, dr, b, r);
-
-	LU_CPU_equi(b, r, 0, r.size());
-	compute_rest(r, F, d0, dr, h);
-}
-
 int main()
 {
-	const int matrixSize = 500 * 1024;
+	const int matrixSize = 500 * 1024 + 1;
 	std::vector<float> a(matrixSize);
 	std::vector<float> b(matrixSize);
 	std::vector<float> c(matrixSize);
 	std::vector<float> r(matrixSize);
-	//float d1 = 1, dr = -1;
-	//float x1 = -400, xr = 400;
-	//std::vector<float> X(matrixSize + 2);
-	//std::vector<float> F(matrixSize + 2);
-	//float h = (xr - x1) / (X.size() - 1);
-	//// Data X, F:
-	//X[0] = x1;
-	//F[0] = 1 / (1 + 4 * X[0] * X[0]);
-	//for (int i = 1; i < X.size(); i++)
-	//{
-	//	X[i] = X[i - 1] + h; F[i] = 1 / (1 + 4 * X[i] * X[i]);
-	//}
-	//deBoorMakeTridiag(X, F, d1, dr, a, b, c, r);
-
-	srand(time(NULL));
-	for (size_t i = 0; i < matrixSize; i++)
+	float d1 = 1, dr = -1;
+	float x1 = -400, xr = 400;
+	std::vector<float> X(matrixSize + 2);
+	std::vector<float> F(matrixSize + 2);
+	float h = (xr - x1) / (X.size() - 1);
+	// Data X, F:
+	X[0] = x1;
+	F[0] = 1 / (1 + 4 * X[0] * X[0]);
+	for (int i = 1; i < X.size(); i++)
 	{
-		a[i] = rand() % 10 + 1;
-		c[i] = rand() % 10 + 1;
-		b[i] = a[i] + c[i] + 1 + rand() % 10; // musi byt diagonalne dominantna
-		r[i] = rand() % 100;
+		X[i] = X[i - 1] + h; F[i] = 1 / (1 + 4 * X[i] * X[i]);
 	}
+	deBoorMakeTridiag(X, F, d1, dr, a, b, c, r);
+
+	//srand(time(NULL));
+	//for (size_t i = 0; i < matrixSize; i++)
+	//{
+	//	a[i] = rand() % 10 + 1;
+	//	c[i] = rand() % 10 + 1;
+	//	b[i] = a[i] + c[i] + 1 + rand() % 10; // musi byt diagonalne dominantna
+	//	r[i] = rand() % 100;
+	//}
 	std::vector<float> a2(matrixSize);
 	std::vector<float> b2(matrixSize);
 	std::vector<float> c2(matrixSize);
@@ -459,10 +455,10 @@ int main()
 	c2 = c;
 	r2 = r;
 	//std::vector<float> b3((F.size() / 2) - 1);
-	//std::vector<float> r3((F.size() / 2) - 1);
+	std::vector<float> r3((F.size() / 2) - 1);
 
-
-	//TorokMakeTridiag(F, h, d1, dr, b3, r3);
+	// =================================================================================================================================================================== VOLAM MAKE TRIDIAG
+	TorokMakeTridiag(F, h, d1, dr, r3);
 
 	cudaEvent_t start, stop_CPU, stop_Torok, stop_GPU;
 	float time1 = 0.0;
@@ -484,9 +480,10 @@ int main()
 	cudaEventSynchronize(stop_CPU);
 	cudaEventElapsedTime(&time1, start, stop_CPU);
 
+	// ===================================================================================================================================================== VOLAM METODU REDUCED
 	// reduced computing on CPU
-	//LU_CPU_equi(b3, r3, 0, r3.size());
-	//r3 = compute_rest(r3, F, d1, dr, h);
+	LU_CPU_equi(r3, 0, r3.size(), true);
+	r3 = compute_rest(r3, F, d1, dr, h);
 
 	cudaEventRecord(stop_Torok);
 	cudaEventSynchronize(stop_Torok);
@@ -505,16 +502,13 @@ int main()
 
 	std::cout << "CPU time: " << time1 << " ms" << std::endl;
 	std::cout << "reduced CPU time: " << time2 << " ms" << std::endl;
-	std::cout << "my GPU time: " << time3 << " ms" << std::endl << std::endl;
+	std::cout << "my GPU time: " << time3 << " ms" << std::endl;
+	std::cout << "normal/reduced: " << time1 / time2 << std::endl;
 	// std::cout.precision(15);
 	for (int i = 0; i < r.size(); i++)
 	{
-		if (r[i] == r[i])
-		{
-			std::cout << i << " = " << r[i] << std::endl;
-		}
-		float diff = r2[i] - r[i];
-		if (diff > 0.00000000000001) { // 10^-15
+		float diff = r3[i + 1] - r2[i];
+		if (diff > 0.00001) { // 10^-5
 			std::cout << "BACHA! rozdiel v " << i << " je presne " << diff << std::endl;
 		}
 	}
