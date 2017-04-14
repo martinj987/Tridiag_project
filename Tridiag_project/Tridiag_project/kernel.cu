@@ -66,10 +66,10 @@ __device__ void LU_tridiag_device(float* a, float* b, float* c, float* r, int fr
 }
 
 // ================================================================================================================================================================ LU DEVICE EQUIDISTANCNE
-__device__ void LU_tridiag_dev_equi(float* r, int from, int to)
+__device__ void LU_tridiag_dev_equi(float* a, float* b, float* r, int from, int to)
 {
-	float *a = new float[to - from];
-	float *b = new float[to - from];
+	// float *a = new float[to - from];
+	// float *b = new float[to - from];
 	for (int i = from + 1, j = 1; i < to; i++, j++)
 	{
 		a[j] = 1 / b[j - 1];
@@ -81,8 +81,8 @@ __device__ void LU_tridiag_dev_equi(float* r, int from, int to)
 	{
 		r[i] = (r[i] - r[i + 1]) / b[j];
 	}
-	delete[] a;
-	delete[] b;
+	// delete[] a;
+	// delete[] b;
 }
 
 void LU_CPU(std::vector<float> a, std::vector<float> b, std::vector<float> c, std::vector<float> &r, int from, int to)
@@ -252,7 +252,7 @@ __global__ void partitioning_reduced(float* r, float* Va, float* Vb, float* Vc, 
 }
 
 // =============================================================================================================================================================================REDUCED FINAL
-__global__ void final_computations_reduced(float* r, float* Vr, int* Vindex, int Vsize)
+__global__ void final_computations_reduced(float* a, float* b, float* r, float* Vr, int* Vindex, int Vsize)
 {
 	int i = (blockDim.x * blockIdx.x + threadIdx.x) * 2;
 	if (i < Vsize)
@@ -271,7 +271,7 @@ __global__ void final_computations_reduced(float* r, float* Vr, int* Vindex, int
 		int idx2 = Vindex[i + 1] - 1;
 		r[idx2] -= Vr[i + 1];
 
-		LU_tridiag_dev_equi(r, idx1, idx2 + 1);
+		LU_tridiag_dev_equi(a, b, r, idx1, idx2 + 1);
 	}
 }
 
@@ -434,6 +434,8 @@ cudaError_t ABM_reduced(std::vector<float> &r, int nOfParts, bool even)
 	cudaEventRecord(start);
 	cudaEventSynchronize(start);
 
+	float *dev_a = 0; CUDA_CALL(cudaMalloc((void**)&dev_a, r.size() * sizeof(float)));
+	float *dev_b = 0; CUDA_CALL(cudaMalloc((void**)&dev_b, r.size() * sizeof(float)));
 	float *dev_r = 0; CUDA_CALL(cudaMalloc((void**)&dev_r, r.size() * sizeof(float)));
 	float *dev_Va = 0; CUDA_CALL(cudaMalloc((void**)&dev_Va, Vsize * sizeof(float)));
 	float *dev_Vb = 0; CUDA_CALL(cudaMalloc((void**)&dev_Vb, Vsize * sizeof(float)));
@@ -480,7 +482,7 @@ cudaError_t ABM_reduced(std::vector<float> &r, int nOfParts, bool even)
 	cudaEventSynchronize(stop_seq);
 	cudaEventElapsedTime(&time4, stop_partitioning, stop_seq);
 
-	final_computations_reduced <<<numBlocks, threadsPerBlock >>> (dev_r, dev_Vr, dev_Vidx, Vr.size());
+	final_computations_reduced <<<numBlocks, threadsPerBlock >>> (dev_a, dev_b, dev_r, dev_Vr, dev_Vidx, Vr.size());
 	CUDA_CALL(cudaGetLastError());
 	cudaError_t err = cudaDeviceSynchronize();
 	if ((err) != cudaSuccess) {
