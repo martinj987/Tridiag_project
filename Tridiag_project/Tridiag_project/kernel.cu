@@ -35,20 +35,20 @@ void deBoorMakeTridiag(std::vector<float> x, std::vector<float> y, float d0, flo
 	r[r.size() - 1] -= c[c.size() - 1] * dn;
 }
 
-__global__ void LU_tridiag(float* a, float* b, float* c, float* r, int from, int to)
-{
-	for (int i = from + 1; i < to; i++)
-	{
-		a[i] = a[i] / b[i - 1];
-		b[i] = b[i] - (a[i] * c[i - 1]);
-		r[i] = r[i] - (a[i] * r[i - 1]);
-	}
-	r[to - 1] = r[to - 1] / b[to - 1];
-	for (int i = to - 2; i >= from; i--)
-	{
-		r[i] = (r[i] - (c[i] * r[i + 1])) / b[i];
-	}
-}
+//__global__ void LU_tridiag(float* a, float* b, float* c, float* r, int from, int to)
+//{
+//	for (int i = from + 1; i < to; i++)
+//	{
+//		a[i] = a[i] / b[i - 1];
+//		b[i] = b[i] - (a[i] * c[i - 1]);
+//		r[i] = r[i] - (a[i] * r[i - 1]);
+//	}
+//	r[to - 1] = r[to - 1] / b[to - 1];
+//	for (int i = to - 2; i >= from; i--)
+//	{
+//		r[i] = (r[i] - (c[i] * r[i + 1])) / b[i];
+//	}
+//}
 
 __device__ void LU_tridiag_device(float* a, float* b, float* c, float* r, int from, int to)
 {
@@ -63,6 +63,26 @@ __device__ void LU_tridiag_device(float* a, float* b, float* c, float* r, int fr
 	{
 		r[i] = (r[i] - (c[i] * r[i + 1])) / b[i];
 	}
+}
+
+// ================================================================================================================================================================ LU DEVICE EQUIDISTANCNE
+__device__ void LU_tridiag_dev_equi(float* r, int from, int to)
+{
+	float *a = new float[to - from];
+	float *b = new float[to - from];
+	for (int i = from + 1, j = 1; i < to; i++, j++)
+	{
+		a[j] = 1 / b[j - 1];
+		r[i] = r[i] - (a[j] * r[i - 1]);
+		b[j] = -14 - a[j];
+	}
+	r[to - 1] = r[to - 1] / b[to - from - 1];
+	for (int i = to - 2, j = to - from - 2; i >= from; i--, j--)
+	{
+		r[i] = (r[i] - r[i + 1]) / b[j];
+	}
+	delete[] a;
+	delete[] b;
 }
 
 void LU_CPU(std::vector<float> a, std::vector<float> b, std::vector<float> c, std::vector<float> &r, int from, int to)
@@ -80,7 +100,6 @@ void LU_CPU(std::vector<float> a, std::vector<float> b, std::vector<float> c, st
 	}
 }
 
-// ======================================================================================================================================================== LU CPU EQUI
 void LU_CPU_equi(std::vector<float> &r, int from, int to, bool last)
 {
 	std::vector<float> a(to - from);
@@ -99,10 +118,10 @@ void LU_CPU_equi(std::vector<float> &r, int from, int to, bool last)
 			b[j] = -14 - a[j];
 		}
 	}
-	r[to - 1] = r[to - 1] / b[to - 1];
+	r[to - 1] = r[to - 1] / b[to - from - 1];
 	for (int i = to - 2, j = to - from - 2; i >= from; i--, j--)
 	{
-		r[i] = (r[i] - r[i + 1]) / b[i];
+		r[i] = (r[i] - r[i + 1]) / b[j];
 	}
 }
 
@@ -138,7 +157,6 @@ __global__ void partitioning(float* a, float* b, float* c, float* r, float* Va, 
 		float Vri = r[j + 1];
 		Vindex[i - 1] = j;
 		Vindex[i] = j + myLength - 1;
-		int jInit = j;
 		for (int k = 2; k < myLength; k++) /* && j < size*/
 		{
 			float alpha = a[j + k] / Vbi;
@@ -176,6 +194,84 @@ __global__ void partitioning(float* a, float* b, float* c, float* r, float* Va, 
 		delete[] dev_b;
 		delete[] dev_c;
 		delete[] dev_r;*/
+	}
+}
+
+// =============================================================================================================================================================================REDUCED PARTITIONING
+__global__ void partitioning_reduced(float* r, float* Va, float* Vb, float* Vc, float* Vr, int* Vindex, int pLength, int Vsize, int remainder, bool even) {
+	int idx = blockDim.x * blockIdx.x + threadIdx.x;
+	int i = idx * 2 + 1;
+	int myLength = pLength;
+	int j = idx * myLength;
+	if (i == Vsize - 1) // if this is the last processor
+	{
+		myLength += remainder;
+	}
+	even = even && (i == Vsize - 1);
+	if (i < Vsize)
+	{
+		float Vai = 1;
+		float Vbi = -14;
+		float Vri = r[j + 1];
+		Vindex[i - 1] = j;
+		Vindex[i] = j + myLength - 1;
+		for (int k = 2; k < myLength; k++)
+		{
+			float alpha = 1 / Vbi;
+			Vai = -Vai * alpha;
+			if (k == myLength - 1 && even)
+			{
+				Vbi = -15 - alpha;
+			}
+			else
+			{
+				Vbi = -14 - alpha;
+			}
+			Vri = r[j + k] - alpha * Vri;
+		}
+		Va[i] = Vai;
+		Vb[i] = Vbi;
+		Vc[i] = 1;
+		Vr[i] = Vri;
+		i--;
+		Vbi = -14;
+		float Vci = 1;
+		Vri = r[j + myLength - 2];
+		for (int k = myLength - 3; k >= 0; k--)
+		{
+			float beta = 1 / Vbi;
+			Vri = r[j + k] - beta * Vri;
+			Vbi = -14 - beta;
+			Vci = -Vci * beta;
+		}
+		Va[i] = 1;
+		Vb[i] = Vbi;
+		Vc[i] = Vci;
+		Vr[i] = Vri;
+	}
+}
+
+// =============================================================================================================================================================================REDUCED FINAL
+__global__ void final_computations_reduced(float* r, float* Vr, int* Vindex, int Vsize)
+{
+	int i = (blockDim.x * blockIdx.x + threadIdx.x) * 2;
+	if (i < Vsize)
+	{
+		/*int Vind = Vindex[i];
+		int Vind1 = Vindex[i + 1];
+		float Vri = Vr[i];
+		float Vri1 = Vr[i + 1];*/
+
+		r[Vindex[i]] = Vr[i];
+		r[Vindex[i + 1]] = Vr[i + 1];
+
+		int idx1 = Vindex[i] + 1;
+		r[idx1] -= Vr[i];
+
+		int idx2 = Vindex[i + 1] - 1;
+		r[idx2] -= Vr[i + 1];
+
+		LU_tridiag_dev_equi(r, idx1, idx2 + 1);
 	}
 }
 
@@ -310,6 +406,109 @@ cudaError_t austin_berndt_moulton(std::vector<float> a, std::vector<float> b, st
 	return err;
 }
 
+// ============================================================================================================================================================================== ABM REDUCED
+cudaError_t ABM_reduced(std::vector<float> &r, int nOfParts, bool even)
+{
+	int Vsize = nOfParts * 2;
+	std::vector<float> Va(Vsize);
+	std::vector<float> Vb(Vsize);
+	std::vector<float> Vc(Vsize);
+	std::vector<float> Vr(Vsize);
+	std::vector<int> Vindex(Vsize);
+
+	cudaEvent_t start, stop_malloc, stop_memcpy1, stop_partitioning, stop_seq, stop_final, stop_memcpy_final;
+	float time1 = 0.0;
+	float time2 = 0.0;
+	float time3 = 0.0;
+	float time4 = 0.0;
+	float time5 = 0.0;
+	float time6 = 0.0;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop_malloc);
+	cudaEventCreate(&stop_memcpy1);
+	cudaEventCreate(&stop_partitioning);
+	cudaEventCreate(&stop_seq);
+	cudaEventCreate(&stop_final);
+	cudaEventCreate(&stop_memcpy_final);
+
+	cudaEventRecord(start);
+	cudaEventSynchronize(start);
+
+	float *dev_r = 0; CUDA_CALL(cudaMalloc((void**)&dev_r, r.size() * sizeof(float)));
+	float *dev_Va = 0; CUDA_CALL(cudaMalloc((void**)&dev_Va, Vsize * sizeof(float)));
+	float *dev_Vb = 0; CUDA_CALL(cudaMalloc((void**)&dev_Vb, Vsize * sizeof(float)));
+	float *dev_Vc = 0; CUDA_CALL(cudaMalloc((void**)&dev_Vc, Vsize * sizeof(float)));
+	float *dev_Vr = 0; CUDA_CALL(cudaMalloc((void**)&dev_Vr, Vsize * sizeof(float)));
+	int *dev_Vidx = 0; CUDA_CALL(cudaMalloc((void**)&dev_Vidx, Vsize * sizeof(int)));
+
+	cudaEventRecord(stop_malloc);
+	cudaEventSynchronize(stop_malloc);
+	cudaEventElapsedTime(&time1, start, stop_malloc);
+
+	CUDA_CALL(cudaMemcpy(dev_r, &r[0], r.size() * sizeof(float), cudaMemcpyHostToDevice));
+
+	cudaEventRecord(stop_memcpy1);
+	cudaEventSynchronize(stop_memcpy1);
+	cudaEventElapsedTime(&time2, stop_malloc, stop_memcpy1);
+
+	int pLength = r.size() / nOfParts;
+	int remainder = r.size() - (pLength * nOfParts);
+	int threadsPerBlock = 128;
+	int numBlocks = (nOfParts + threadsPerBlock - 1) / threadsPerBlock;
+
+	CUDA_CALL(cudaSetDevice(0));
+
+	partitioning_reduced <<<numBlocks, threadsPerBlock >>> (dev_r, dev_Va, dev_Vb, dev_Vc, dev_Vr, dev_Vidx, pLength, Vr.size(), remainder, even);
+	CUDA_CALL(cudaGetLastError());
+	CUDA_CALL(cudaDeviceSynchronize());
+
+	cudaEventRecord(stop_partitioning);
+	cudaEventSynchronize(stop_partitioning);
+	cudaEventElapsedTime(&time3, stop_memcpy1, stop_partitioning);
+
+	CUDA_CALL(cudaMemcpy(&Va[0], dev_Va, Vsize * sizeof(float), cudaMemcpyDeviceToHost));
+	CUDA_CALL(cudaMemcpy(&Vb[0], dev_Vb, Vsize * sizeof(float), cudaMemcpyDeviceToHost));
+	CUDA_CALL(cudaMemcpy(&Vc[0], dev_Vc, Vsize * sizeof(float), cudaMemcpyDeviceToHost));
+	CUDA_CALL(cudaMemcpy(&Vr[0], dev_Vr, Vsize * sizeof(float), cudaMemcpyDeviceToHost));
+	LU_CPU(Va, Vb, Vc, Vr, 0, Vsize);
+	CUDA_CALL(cudaMemcpy(dev_Vr, &Vr[0], Vsize * sizeof(float), cudaMemcpyHostToDevice));
+	/*LU_tridiag<<<1, 1>>>(dev_Va, dev_Vb, dev_Vc, dev_Vr, 0, Vsize);
+	CUDA_CALL(cudaGetLastError());
+	CUDA_CALL(cudaDeviceSynchronize());*/
+
+	cudaEventRecord(stop_seq);
+	cudaEventSynchronize(stop_seq);
+	cudaEventElapsedTime(&time4, stop_partitioning, stop_seq);
+
+	final_computations_reduced <<<numBlocks, threadsPerBlock >>> (dev_r, dev_Vr, dev_Vidx, Vr.size());
+	CUDA_CALL(cudaGetLastError());
+	cudaError_t err = cudaDeviceSynchronize();
+	if ((err) != cudaSuccess) {
+		printf("Error \"%s\" at %s :%d \n", cudaGetErrorString(err), __FILE__, __LINE__);
+	}
+
+	cudaEventRecord(stop_final);
+	cudaEventSynchronize(stop_final);
+	cudaEventElapsedTime(&time5, stop_seq, stop_final);
+
+	CUDA_CALL(cudaMemcpy(&r[0], dev_r, r.size() * sizeof(float), cudaMemcpyDeviceToHost));
+
+	cudaEventRecord(stop_memcpy_final);
+	cudaEventSynchronize(stop_memcpy_final);
+	cudaEventElapsedTime(&time6, stop_final, stop_memcpy_final);
+
+	std::cout << "malloc time: " << time1 << " ms" << std::endl;
+	std::cout << "memcpy time: " << time2 << " ms" << std::endl;
+	std::cout << "partit time: " << time3 << " ms" << std::endl;
+	std::cout << "sequen time: " << time4 << " ms" << std::endl;
+	std::cout << "fiinal time: " << time5 << " ms" << std::endl;
+	std::cout << "rescpy time: " << time6 << " ms" << std::endl;
+	std::cout << "sum time: " << time3 + time4 + time5 << " ms" << std::endl;
+	std::cout << "============================" << std::endl;
+
+	return err;
+}
+
 void ABM_on_CPU(std::vector<float> a, std::vector<float> b, std::vector<float> c, std::vector<float> &r, int nOfParts) {
 	int Vsize = nOfParts * 2;
 	std::vector<float> Va(Vsize);
@@ -372,7 +571,6 @@ void ABM_on_CPU(std::vector<float> a, std::vector<float> b, std::vector<float> c
 	}
 }
 
-// ==================================================================================================================================================================== REST
 std::vector<float> compute_rest(std::vector<float> r, std::vector<float> y, float d0, float dn, float h) {
 	int size = y.size();
 	std::vector<float> d(size);
@@ -389,7 +587,7 @@ std::vector<float> compute_rest(std::vector<float> r, std::vector<float> y, floa
 }
 
 // ===================================================================================================================================================================== TOROK MAKE TRIDIAG
-void TorokMakeTridiag(std::vector<float> y, float h, float d0, float dn, /*std::vector<float> &b,*/ std::vector<float> &r)
+void TorokMakeTridiag(std::vector<float> y, float h, float d0, float dn, std::vector<float> &r)
 {
 	// std::vector<float> r((y.size() / 2) - 1);
 	float mu1 = 3 / h;
@@ -398,7 +596,6 @@ void TorokMakeTridiag(std::vector<float> y, float h, float d0, float dn, /*std::
 	for (int i = 0; i < r.size() - 1; i++)
 	{
 		r[i] = mu1 * (y[j + 2] - y[j - 2]) - mu2 * (y[j + 1] - y[j - 1]);
-		//b[i] = -14;
 		j += 2;
 	}
 	r[0] -= d0;
@@ -408,15 +605,14 @@ void TorokMakeTridiag(std::vector<float> y, float h, float d0, float dn, /*std::
 	if (y.size() % 2 == 0) {
 		eta = -4;
 		tau = 0;
-		//b[r.size() - 1] = -15;
 	} else {
 		eta = 1;
 		tau = 2;
-		//b[r.size() - 1] = -14;
 	}
 	r[r.size() - 1] = mu1 * (y[j + tau] - y[j - 2]) - mu2 * (y[j + 1] - y[j - 1]) - eta * dn;
 }
 
+// =================================================================================================================================================================== MAIN
 int main()
 {
 	const int matrixSize = 500 * 1024 + 1;
@@ -428,6 +624,7 @@ int main()
 	float x1 = -400, xr = 400;
 	std::vector<float> X(matrixSize + 2);
 	std::vector<float> F(matrixSize + 2);
+	std::vector<float> r3((F.size() / 2) - 1);
 	float h = (xr - x1) / (X.size() - 1);
 	// Data X, F:
 	X[0] = x1;
@@ -436,8 +633,29 @@ int main()
 	{
 		X[i] = X[i - 1] + h; F[i] = 1 / (1 + 4 * X[i] * X[i]);
 	}
+
+	// =================================================================================================================================================================== VOLAM MAKE TRIDIAG
+	cudaEvent_t start_make, stop_makeT, stop_makedB;
+	float timeT = 0.0;
+	float timedB = 0.0;
+	cudaEventCreate(&start_make);
+	cudaEventCreate(&stop_makeT);
+	cudaEventCreate(&stop_makedB);
+
+	cudaEventRecord(start_make);
+	cudaEventSynchronize(start_make);
+
+	TorokMakeTridiag(F, h, d1, dr, r3);
+
+	cudaEventRecord(stop_makeT);
+	cudaEventSynchronize(stop_makeT);
+
 	deBoorMakeTridiag(X, F, d1, dr, a, b, c, r);
 
+	cudaEventRecord(stop_makedB);
+	cudaEventSynchronize(stop_makedB);
+	cudaEventElapsedTime(&timeT, start_make, stop_makeT);
+	cudaEventElapsedTime(&timedB, stop_makeT, stop_makedB);
 	//srand(time(NULL));
 	//for (size_t i = 0; i < matrixSize; i++)
 	//{
@@ -450,24 +668,24 @@ int main()
 	std::vector<float> b2(matrixSize);
 	std::vector<float> c2(matrixSize);
 	std::vector<float> r2(matrixSize);
+	std::vector<float> r4((F.size() / 2) - 1);
 	a2 = a;
 	b2 = b;
 	c2 = c;
 	r2 = r;
+	r4 = r3;
 	//std::vector<float> b3((F.size() / 2) - 1);
-	std::vector<float> r3((F.size() / 2) - 1);
 
-	// =================================================================================================================================================================== VOLAM MAKE TRIDIAG
-	TorokMakeTridiag(F, h, d1, dr, r3);
-
-	cudaEvent_t start, stop_CPU, stop_Torok, stop_GPU;
+	cudaEvent_t start, stop_CPU, stop_Torok, stop_GPU, stop_GPU_reduced;
 	float time1 = 0.0;
 	float time2 = 0.0;
 	float time3 = 0.0;
+	float time4 = 0.0;
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop_CPU);
 	cudaEventCreate(&stop_Torok);
 	cudaEventCreate(&stop_GPU);
+	cudaEventCreate(&stop_GPU_reduced);
 
 	cudaEventRecord(start);
 	cudaEventSynchronize(start);
@@ -480,7 +698,6 @@ int main()
 	cudaEventSynchronize(stop_CPU);
 	cudaEventElapsedTime(&time1, start, stop_CPU);
 
-	// ===================================================================================================================================================== VOLAM METODU REDUCED
 	// reduced computing on CPU
 	LU_CPU_equi(r3, 0, r3.size(), true);
 	r3 = compute_rest(r3, F, d1, dr, h);
@@ -500,14 +717,30 @@ int main()
 	cudaEventSynchronize(stop_GPU);
 	cudaEventElapsedTime(&time3, stop_Torok, stop_GPU);
 
+	// ======================================================================================================================================================== VOLAM METODU GPU REDUCED
+	// ABM_reduced(std::vector<float> &r, int nOfParts)
+	cudaStatus = ABM_reduced(r4, 1024, (F.size() % 2 == 0));
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "GPU computing failed!\n");
+		return 1;
+	}
+	r4 = compute_rest(r4, F, d1, dr, h);
+
+	cudaEventRecord(stop_GPU_reduced);
+	cudaEventSynchronize(stop_GPU_reduced);
+	cudaEventElapsedTime(&time4, stop_GPU, stop_GPU_reduced);
+
+	std::cout << "redu make time: " << timeT << " ms" << std::endl;
+	std::cout << "full make time: " << timedB << " ms" << std::endl;
 	std::cout << "CPU time: " << time1 << " ms" << std::endl;
 	std::cout << "reduced CPU time: " << time2 << " ms" << std::endl;
 	std::cout << "my GPU time: " << time3 << " ms" << std::endl;
-	std::cout << "normal/reduced: " << time1 / time2 << std::endl;
+	std::cout << "reduced GPU time: " << time4 << " ms" << std::endl;
+	std::cout << "normal/reduced: " << time1 / time2 << std::endl << std::endl;
 	// std::cout.precision(15);
 	for (int i = 0; i < r.size(); i++)
 	{
-		float diff = r3[i + 1] - r2[i];
+		float diff = r4[i + 1] - r2[i];
 		if (diff > 0.00001) { // 10^-5
 			std::cout << "BACHA! rozdiel v " << i << " je presne " << diff << std::endl;
 		}
