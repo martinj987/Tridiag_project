@@ -35,6 +35,20 @@ void deBoorMakeTridiag(std::vector<float> x, std::vector<float> y, float d0, flo
 	r[r.size() - 1] -= c[c.size() - 1] * dn;
 }
 
+void deBoorMakeEqui(std::vector<float> x, std::vector<float> y, float d0, float dn, std::vector<float> &a, std::vector<float> &b, std::vector<float> &c, std::vector<float> &r)
+{
+	float h = 3 / (x[1] - x[0]);
+	for (int i = 0; i < r.size(); i++)
+	{
+		a[i] = 1;
+		b[i] = 4;
+		c[i] = 1;
+		r[i] = h * (y[i + 2] - y[i]);
+	}
+	r[0] -= d0;
+	r[r.size() - 1] -= dn;
+}
+
 //__global__ void LU_tridiag(float* a, float* b, float* c, float* r, int from, int to)
 //{
 //	for (int i = from + 1; i < to; i++)
@@ -70,34 +84,20 @@ __device__ void LU_tridiag_dev_equi(float* a, float* b, float* r, int from, int 
 {
 	// float *a = new float[to - from];
 	// float *b = new float[to - from];
-	for (int i = from + 1, j = 1; i < to; i++, j++)
+	b[from] = -14;
+	for (int i = from + 1; i < to; i++)
 	{
-		a[j] = 1 / b[j - 1];
-		r[i] = r[i] - (a[j] * r[i - 1]);
-		b[j] = -14 - a[j];
+		a[i] = 1 / b[i - 1];
+		r[i] = r[i] - (a[i] * r[i - 1]);
+		b[i] = -14 - a[i];
 	}
-	r[to - 1] = r[to - 1] / b[to - from - 1];
+	r[to - 1] = r[to - 1] / b[to - 1];
 	for (int i = to - 2, j = to - from - 2; i >= from; i--, j--)
 	{
-		r[i] = (r[i] - r[i + 1]) / b[j];
+		r[i] = (r[i] - r[i + 1]) / b[i];
 	}
 	// delete[] a;
 	// delete[] b;
-}
-
-void LU_CPU(std::vector<float> a, std::vector<float> b, std::vector<float> c, std::vector<float> &r, int from, int to)
-{
-	for (int i = from + 1; i < to; i++)
-	{
-		a[i] = a[i] / b[i - 1];
-		b[i] = b[i] - (a[i] * c[i - 1]);
-		r[i] = r[i] - (a[i] * r[i - 1]);
-	}
-	r[to - 1] = r[to - 1] / b[to - 1];
-	for (int i = to - 2; i >= from; i--)
-	{
-		r[i] = (r[i] - (c[i] * r[i + 1])) / b[i];
-	}
 }
 
 void LU_CPU_equi(std::vector<float> &r, int from, int to, bool last)
@@ -105,6 +105,7 @@ void LU_CPU_equi(std::vector<float> &r, int from, int to, bool last)
 	std::vector<float> a(to - from);
 	std::vector<float> b(to - from);
 	bool evenAndLast = (r.size() % 2 == 0 && last);
+	b[0] = -14;
 	for (int i = from + 1, j = 1; i < to; i++, j++)
 	{
 		a[j] = 1 / b[j - 1];
@@ -122,6 +123,21 @@ void LU_CPU_equi(std::vector<float> &r, int from, int to, bool last)
 	for (int i = to - 2, j = to - from - 2; i >= from; i--, j--)
 	{
 		r[i] = (r[i] - r[i + 1]) / b[j];
+	}
+}
+
+void LU_CPU(std::vector<float> a, std::vector<float> b, std::vector<float> c, std::vector<float> &r, int from, int to)
+{
+	for (int i = from + 1; i < to; i++)
+	{
+		a[i] = a[i] / b[i - 1];
+		b[i] = b[i] - (a[i] * c[i - 1]);
+		r[i] = r[i] - (a[i] * r[i - 1]);
+	}
+	r[to - 1] = r[to - 1] / b[to - 1];
+	for (int i = to - 2; i >= from; i--)
+	{
+		r[i] = (r[i] - (c[i] * r[i + 1])) / b[i];
 	}
 }
 
@@ -389,6 +405,10 @@ cudaError_t austin_berndt_moulton(std::vector<float> a, std::vector<float> b, st
 	cudaEventElapsedTime(&time5, stop_seq, stop_final);
 
 	CUDA_CALL(cudaMemcpy(&r[0], dev_r, r.size() * sizeof(float), cudaMemcpyDeviceToHost));
+	for (size_t i = 0; i < r.size(); i++)
+	{
+		//std::cout << "r[" << i << "] = " << r[i] << std::endl;
+	}
 
 	cudaEventRecord(stop_memcpy_final);
 	cudaEventSynchronize(stop_memcpy_final);
@@ -623,7 +643,7 @@ int main()
 	std::vector<float> c(matrixSize);
 	std::vector<float> r(matrixSize);
 	float d1 = 1, dr = -1;
-	float x1 = -400, xr = 400;
+	float x1 = -4000, xr = 4000;
 	std::vector<float> X(matrixSize + 2);
 	std::vector<float> F(matrixSize + 2);
 	std::vector<float> r3((F.size() / 2) - 1);
@@ -633,7 +653,8 @@ int main()
 	F[0] = 1 / (1 + 4 * X[0] * X[0]);
 	for (int i = 1; i < X.size(); i++)
 	{
-		X[i] = X[i - 1] + h; F[i] = 1 / (1 + 4 * X[i] * X[i]);
+		X[i] = X[i - 1] + h; //F[i] = 1 / (1 + 4 * X[i] * X[i]);
+		F[i] = sin(X[i]);
 	}
 
 	// =================================================================================================================================================================== VOLAM MAKE TRIDIAG
@@ -652,7 +673,7 @@ int main()
 	cudaEventRecord(stop_makeT);
 	cudaEventSynchronize(stop_makeT);
 
-	deBoorMakeTridiag(X, F, d1, dr, a, b, c, r);
+	deBoorMakeEqui(X, F, d1, dr, a, b, c, r);
 
 	cudaEventRecord(stop_makedB);
 	cudaEventSynchronize(stop_makedB);
@@ -726,6 +747,13 @@ int main()
 		fprintf(stderr, "GPU computing failed!\n");
 		return 1;
 	}
+	for (size_t i = 0; i < r4.size(); i++)
+	{
+		if (r4[i] != r4[i])
+		{
+			//std::cout << "hodnota " << i + 1 << " je " << r4[i] << std::endl;
+		}
+	}
 	r4 = compute_rest(r4, F, d1, dr, h);
 
 	cudaEventRecord(stop_GPU_reduced);
@@ -742,6 +770,10 @@ int main()
 	// std::cout.precision(15);
 	for (int i = 0; i < r.size(); i++)
 	{
+		if (r4[i + 1] != r4[i + 1])
+		{
+			std::cout << "hodnota " << i + 1 << " je " << r3[i + 1] << std::endl;
+		}
 		float diff = r4[i + 1] - r2[i];
 		if (diff > 0.00001) { // 10^-5
 			std::cout << "BACHA! rozdiel v " << i << " je presne " << diff << std::endl;
