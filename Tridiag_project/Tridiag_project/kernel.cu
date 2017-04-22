@@ -49,6 +49,32 @@ void deBoorMakeEqui(std::vector<float> x, std::vector<float> y, float d0, float 
 	r[r.size() - 1] -= dn;
 }
 
+int getSPcores(cudaDeviceProp devProp)
+{
+	int cores = 0;
+	switch (devProp.major) {
+	case 2: // Fermi
+		if (devProp.minor == 1) cores = 48;
+		else cores = 32;
+		break;
+	case 3: // Kepler
+		cores = 192;
+		break;
+	case 5: // Maxwell
+		cores = 128;
+		break;
+	case 6: // Pascal
+		if (devProp.minor == 1) cores = 128;
+		else if (devProp.minor == 0) cores = 64;
+		else printf("Unknown device type\n");
+		break;
+	default:
+		printf("Unknown device type\n");
+		break;
+	}
+	return cores;
+}
+
 //__global__ void LU_tridiag(float* a, float* b, float* c, float* r, int from, int to)
 //{
 //	for (int i = from + 1; i < to; i++)
@@ -346,8 +372,9 @@ std::vector<float> compute_rest(std::vector<float> r, std::vector<float> y, floa
 	return d;
 }
 
-cudaError_t austin_berndt_moulton(std::vector<float> a, std::vector<float> b, std::vector<float> c, std::vector<float> &r, int nOfParts)
+cudaError_t austin_berndt_moulton(std::vector<float> a, std::vector<float> b, std::vector<float> c, std::vector<float> &r, int threadsPerBlock, int numberOfMultiprocessors)
 {
+	int nOfParts = numberOfMultiprocessors * threadsPerBlock;
 	int Vsize = nOfParts * 2;
 	std::vector<float> Va(Vsize);
 	std::vector<float> Vb(Vsize);
@@ -398,10 +425,7 @@ cudaError_t austin_berndt_moulton(std::vector<float> a, std::vector<float> b, st
 
 	int pLength = r.size() / nOfParts;
 	int remainder = r.size() - (pLength * nOfParts);
-	int threadsPerBlock = 128;
 	int numBlocks = (nOfParts + threadsPerBlock - 1) / threadsPerBlock;
-
-	CUDA_CALL(cudaSetDevice(0));
 
 	partitioning <<<numBlocks, threadsPerBlock>>> (dev_a, dev_b, dev_c, dev_r, dev_Va, dev_Vb, dev_Vc, dev_Vr, dev_Vidx, pLength, Vr.size(), remainder);
 	CUDA_CALL(cudaGetLastError());
@@ -455,8 +479,9 @@ cudaError_t austin_berndt_moulton(std::vector<float> a, std::vector<float> b, st
 }
 
 // ============================================================================================================================================================================== ABM REDUCED
-cudaError_t ABM_reduced(std::vector<float> &r, std::vector<float> &F, int nOfParts, float d1, float dr, float h)
+cudaError_t ABM_reduced(std::vector<float> &r, std::vector<float> &F, float d1, float dr, float h, int threadsPerBlock, int numberOfMultiprocessors)
 {
+	int nOfParts = numberOfMultiprocessors * threadsPerBlock;
 	int Vsize = nOfParts * 2;
 	std::vector<float> Va(Vsize);
 	std::vector<float> Vb(Vsize);
@@ -512,10 +537,7 @@ cudaError_t ABM_reduced(std::vector<float> &r, std::vector<float> &F, int nOfPar
 
 	int pLength = r.size() / nOfParts;
 	int remainder = r.size() - (pLength * nOfParts);
-	int threadsPerBlock = 128;
 	int numBlocks = (nOfParts + threadsPerBlock - 1) / threadsPerBlock;
-
-	CUDA_CALL(cudaSetDevice(0));
 
 	partitioning_reduced <<<numBlocks, threadsPerBlock >>> (dev_r, dev_Va, dev_Vb, dev_Vc, dev_Vr, dev_Vidx, pLength, Vr.size(), remainder, (F.size() % 2 == 0));
 	CUDA_CALL(cudaGetLastError());
@@ -641,8 +663,7 @@ void ABM_on_CPU(std::vector<float> a, std::vector<float> b, std::vector<float> c
 	}
 }
 
-// ===================================================================================================================================================================== TOROK MAKE TRIDIAG
-void TorokMakeTridiag(std::vector<float> y, float h, float d0, float dn, std::vector<float> &r)
+void ReducedMakeTridiag(std::vector<float> y, float h, float d0, float dn, std::vector<float> &r)
 {
 	// std::vector<float> r((y.size() / 2) - 1);
 	float mu1 = 3 / h;
@@ -691,6 +712,12 @@ int main()
 	}
 
 	// =================================================================================================================================================================== VOLAM MAKE TRIDIAG
+	CUDA_CALL(cudaSetDevice(0));
+	cudaDeviceProp deviceProp;
+	cudaGetDeviceProperties(&deviceProp, 0);
+	int numberOfThreads = getSPcores(deviceProp);
+	int mp = deviceProp.multiProcessorCount;
+
 	cudaEvent_t start_make, stop_makeT, stop_makedB;
 	float timeT = 0.0;
 	float timedB = 0.0;
@@ -701,7 +728,7 @@ int main()
 	cudaEventRecord(start_make);
 	cudaEventSynchronize(start_make);
 
-	TorokMakeTridiag(F, h, d1, dr, r3);
+	ReducedMakeTridiag(F, h, d1, dr, r3);
 
 	cudaEventRecord(stop_makeT);
 	cudaEventSynchronize(stop_makeT);
@@ -730,16 +757,15 @@ int main()
 	c2 = c;
 	r2 = r;
 	r4 = r3;
-	//std::vector<float> b3((F.size() / 2) - 1);
 
-	cudaEvent_t start, stop_CPU, stop_Torok, stop_GPU, stop_GPU_reduced;
+	cudaEvent_t start, stop_CPU, stop_reduced, stop_GPU, stop_GPU_reduced;
 	float time1 = 0.0;
 	float time2 = 0.0;
 	float time3 = 0.0;
 	float time4 = 0.0;
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop_CPU);
-	cudaEventCreate(&stop_Torok);
+	cudaEventCreate(&stop_reduced);
 	cudaEventCreate(&stop_GPU);
 	cudaEventCreate(&stop_GPU_reduced);
 
@@ -758,12 +784,12 @@ int main()
 	LU_CPU_equi(r3, 0, r3.size(), (F.size() % 2 == 0));
 	r3 = compute_rest(r3, F, d1, dr, h);
 
-	cudaEventRecord(stop_Torok);
-	cudaEventSynchronize(stop_Torok);
-	cudaEventElapsedTime(&time2, stop_CPU, stop_Torok);
+	cudaEventRecord(stop_reduced);
+	cudaEventSynchronize(stop_reduced);
+	cudaEventElapsedTime(&time2, stop_CPU, stop_reduced);
 
 	// computing on GPU
-	cudaError_t cudaStatus = austin_berndt_moulton(a, b, c, r, 1024);
+	cudaError_t cudaStatus = austin_berndt_moulton(a, b, c, r, numberOfThreads, mp);
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "GPU computing failed!\n");
 		return 1;
@@ -771,15 +797,14 @@ int main()
 
 	cudaEventRecord(stop_GPU);
 	cudaEventSynchronize(stop_GPU);
-	cudaEventElapsedTime(&time3, stop_Torok, stop_GPU);
+	cudaEventElapsedTime(&time3, stop_reduced, stop_GPU);
 
 	// ======================================================================================================================================================== VOLAM METODU GPU REDUCED
-	cudaStatus = ABM_reduced(r4, F, 1024, d1, dr, h);
+	cudaStatus = ABM_reduced(r4, F, d1, dr, h, numberOfThreads, mp);
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "GPU computing failed!\n");
 		return 1;
 	}
-	// r4 = compute_rest(r4, F, d1, dr, h);
 
 	cudaEventRecord(stop_GPU_reduced);
 	cudaEventSynchronize(stop_GPU_reduced);
