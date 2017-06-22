@@ -1,6 +1,7 @@
 #include "cuda_runtime.h"
 #include "cuda.h"
 #include "device_launch_parameters.h"
+#include "cusparse.h"
 
 #include <time.h>
 #include <stdlib.h>
@@ -183,10 +184,10 @@ __global__ void partitioning(float* a, float* b, float* c, float* r, float* Va, 
 		float *dev_r = new float[myLength];
 		for (int k = 0; k < myLength; k++)
 		{
-			dev_a[k] = a[j + k];
-			dev_b[k] = b[j + k];
-			dev_c[k] = c[j + k];
-			dev_r[k] = r[j + k];
+		dev_a[k] = a[j + k];
+		dev_b[k] = b[j + k];
+		dev_c[k] = c[j + k];
+		dev_r[k] = r[j + k];
 		}*/
 		/*float Vai = dev_a[1];
 		float Vbi = dev_b[1];
@@ -345,7 +346,7 @@ __global__ void rest_gpu(float* d, float* r, float* y, int Dsize, int Rsize, flo
 	if (i < Rsize)
 	{
 		int idx = (i + 1) * 2;
-		float Didx_prev = (i > 0) ? r[i - 1] : d0 ;
+		float Didx_prev = (i > 0) ? r[i - 1] : d0;
 		float Didx_next = (idx < Dsize - 1) ? r[i] : dn;
 		float mu1 = 3 / h, dp4 = 0.25;
 		if (i == 0)
@@ -372,7 +373,8 @@ std::vector<float> compute_rest(std::vector<float> r, std::vector<float> y, floa
 	return d;
 }
 
-cudaError_t austin_berndt_moulton(std::vector<float> a, std::vector<float> b, std::vector<float> c, std::vector<float> &r, int threadsPerBlock, int numberOfMultiprocessors)
+// cudaError_t
+float austin_berndt_moulton(std::vector<float> &d, std::vector<float> a, std::vector<float> b, std::vector<float> c, std::vector<float> &r, int threadsPerBlock, int numberOfMultiprocessors)
 {
 	int nOfParts = numberOfMultiprocessors * threadsPerBlock;
 	int Vsize = nOfParts * 2;
@@ -427,7 +429,7 @@ cudaError_t austin_berndt_moulton(std::vector<float> a, std::vector<float> b, st
 	int remainder = r.size() - (pLength * nOfParts);
 	int numBlocks = (nOfParts + threadsPerBlock - 1) / threadsPerBlock;
 
-	partitioning <<<numBlocks, threadsPerBlock>>> (dev_a, dev_b, dev_c, dev_r, dev_Va, dev_Vb, dev_Vc, dev_Vr, dev_Vidx, pLength, Vr.size(), remainder);
+	partitioning << <numBlocks, threadsPerBlock >> > (dev_a, dev_b, dev_c, dev_r, dev_Va, dev_Vb, dev_Vc, dev_Vr, dev_Vidx, pLength, Vr.size(), remainder);
 	CUDA_CALL(cudaGetLastError());
 	CUDA_CALL(cudaDeviceSynchronize());
 
@@ -449,7 +451,7 @@ cudaError_t austin_berndt_moulton(std::vector<float> a, std::vector<float> b, st
 	cudaEventSynchronize(stop_seq);
 	cudaEventElapsedTime(&time4, stop_partitioning, stop_seq);
 
-	final_computations <<<numBlocks, threadsPerBlock>>> (dev_a, dev_b, dev_c, dev_r, dev_Vr, dev_Vidx, Vr.size());
+	final_computations << <numBlocks, threadsPerBlock >> > (dev_a, dev_b, dev_c, dev_r, dev_Vr, dev_Vidx, Vr.size());
 	CUDA_CALL(cudaGetLastError());
 	cudaError_t err = cudaDeviceSynchronize();
 	if ((err) != cudaSuccess) {
@@ -460,26 +462,38 @@ cudaError_t austin_berndt_moulton(std::vector<float> a, std::vector<float> b, st
 	cudaEventSynchronize(stop_final);
 	cudaEventElapsedTime(&time5, stop_seq, stop_final);
 
-	CUDA_CALL(cudaMemcpy(&r[0], dev_r, r.size() * sizeof(float), cudaMemcpyDeviceToHost));
+	CUDA_CALL(cudaMemcpy(&d[0], dev_r, r.size() * sizeof(float), cudaMemcpyDeviceToHost));
 
 	cudaEventRecord(stop_memcpy_final);
 	cudaEventSynchronize(stop_memcpy_final);
 	cudaEventElapsedTime(&time6, stop_final, stop_memcpy_final);
 
-	std::cout << "malloc time: " << time1 << " ms" << std::endl;
-	std::cout << "memcpy time: " << time2 << " ms" << std::endl;
-	std::cout << "partit time: " << time3 << " ms" << std::endl;
-	std::cout << "sequen time: " << time4 << " ms" << std::endl;
-	std::cout << "fiinal time: " << time5 << " ms" << std::endl;
-	std::cout << "rescpy time: " << time6 << " ms" << std::endl;
-	std::cout << "sum time: " << time3 + time4 + time5 << " ms" << std::endl;
-	std::cout << "============================" << std::endl;
+	CUDA_CALL(cudaFree(dev_a));
+	CUDA_CALL(cudaFree(dev_b));
+	CUDA_CALL(cudaFree(dev_c));
+	CUDA_CALL(cudaFree(dev_r));
+	CUDA_CALL(cudaFree(dev_Va));
+	CUDA_CALL(cudaFree(dev_Vb));
+	CUDA_CALL(cudaFree(dev_Vc));
+	CUDA_CALL(cudaFree(dev_Vr));
+	CUDA_CALL(cudaFree(dev_Vidx));
 
-	return err;
+	//std::cout << "malloc time: " << time1 << " ms" << std::endl;
+	//std::cout << "memcpy time: " << time2 << " ms" << std::endl;
+	//std::cout << "partit time: " << time3 << " ms" << std::endl;
+	//std::cout << "sequen time: " << time4 << " ms" << std::endl;
+	//std::cout << "fiinal time: " << time5 << " ms" << std::endl;
+	//std::cout << "rescpy time: " << time6 << " ms" << std::endl;
+	//std::cout << "sum time: " << time3 + time4 + time5 << " ms" << std::endl;
+	//std::cout << "============================" << std::endl;
+
+	// return err;
+	return time3 + time4 + time5;
 }
 
 // ============================================================================================================================================================================== ABM REDUCED
-cudaError_t ABM_reduced(std::vector<float> &r, std::vector<float> &F, float d1, float dr, float h, int threadsPerBlock, int numberOfMultiprocessors)
+// cudaError_t
+float ABM_reduced(std::vector<float> &d, std::vector<float> &r, std::vector<float> &F, float d1, float dr, float h, int threadsPerBlock, int numberOfMultiprocessors)
 {
 	int nOfParts = numberOfMultiprocessors * threadsPerBlock;
 	int Vsize = nOfParts * 2;
@@ -487,7 +501,7 @@ cudaError_t ABM_reduced(std::vector<float> &r, std::vector<float> &F, float d1, 
 	std::vector<float> Vb(Vsize);
 	std::vector<float> Vc(Vsize);
 	std::vector<float> Vr(Vsize);
-	std::vector<float> d(F.size());
+	// std::vector<float> d(F.size());
 	std::vector<int> Vindex(Vsize);
 
 	std::vector<float> r2(r.size());
@@ -539,7 +553,7 @@ cudaError_t ABM_reduced(std::vector<float> &r, std::vector<float> &F, float d1, 
 	int remainder = r.size() - (pLength * nOfParts);
 	int numBlocks = (nOfParts + threadsPerBlock - 1) / threadsPerBlock;
 
-	partitioning_reduced <<<numBlocks, threadsPerBlock >>> (dev_r, dev_Va, dev_Vb, dev_Vc, dev_Vr, dev_Vidx, pLength, Vr.size(), remainder, (F.size() % 2 == 0));
+	partitioning_reduced << <numBlocks, threadsPerBlock >> > (dev_r, dev_Va, dev_Vb, dev_Vc, dev_Vr, dev_Vidx, pLength, Vr.size(), remainder, (F.size() % 2 == 0));
 	CUDA_CALL(cudaGetLastError());
 	CUDA_CALL(cudaDeviceSynchronize());
 
@@ -561,7 +575,7 @@ cudaError_t ABM_reduced(std::vector<float> &r, std::vector<float> &F, float d1, 
 	cudaEventSynchronize(stop_seq);
 	cudaEventElapsedTime(&time4, stop_partitioning, stop_seq);
 
-	final_computations_reduced <<<numBlocks, threadsPerBlock >>> (dev_a, dev_b, dev_r, dev_Vr, dev_Vidx, Vr.size());
+	final_computations_reduced << <numBlocks, threadsPerBlock >> > (dev_a, dev_b, dev_r, dev_Vr, dev_Vidx, Vr.size());
 	CUDA_CALL(cudaGetLastError());
 	cudaError_t err = cudaDeviceSynchronize();
 	if ((err) != cudaSuccess) {
@@ -574,31 +588,43 @@ cudaError_t ABM_reduced(std::vector<float> &r, std::vector<float> &F, float d1, 
 
 	int Rsize = (F.size() % 2 == 0) ? r.size() : r.size() + 1;
 	numBlocks = (Rsize + threadsPerBlock - 1) / threadsPerBlock;
-	rest_gpu <<<numBlocks, threadsPerBlock >>> (dev_d, dev_r, dev_F, F.size(), Rsize, d1, dr, h);
+	rest_gpu << <numBlocks, threadsPerBlock >> > (dev_d, dev_r, dev_F, F.size(), Rsize, d1, dr, h);
 
 	cudaEventRecord(stop_rest);
 	cudaEventSynchronize(stop_rest);
 	cudaEventElapsedTime(&time7, stop_final, stop_rest);
 
 	CUDA_CALL(cudaMemcpy(&d[0], dev_d, d.size() * sizeof(float), cudaMemcpyDeviceToHost));
-	r = d;
-	r[r.size() - 1] = dr;
+	// r = d;
+	d[d.size() - 1] = dr;
 
 	cudaEventRecord(stop_memcpy_final);
 	cudaEventSynchronize(stop_memcpy_final);
 	cudaEventElapsedTime(&time6, stop_rest, stop_memcpy_final);
 
-	std::cout << "malloc time: " << time1 << " ms" << std::endl;
-	std::cout << "memcpy time: " << time2 << " ms" << std::endl;
-	std::cout << "partit time: " << time3 << " ms" << std::endl;
-	std::cout << "sequen time: " << time4 << " ms" << std::endl;
-	std::cout << "fiinal time: " << time5 << " ms" << std::endl;
-	std::cout << "rest,, time: " << time7 << " ms" << std::endl;
-	std::cout << "rescpy time: " << time6 << " ms" << std::endl;
-	std::cout << "sum time: " << time3 + time4 + time5 + time7 << " ms" << std::endl;
-	std::cout << "============================" << std::endl;
+	CUDA_CALL(cudaFree(dev_a));
+	CUDA_CALL(cudaFree(dev_b));
+	CUDA_CALL(cudaFree(dev_r));
+	CUDA_CALL(cudaFree(dev_d));
+	CUDA_CALL(cudaFree(dev_F));
+	CUDA_CALL(cudaFree(dev_Va));
+	CUDA_CALL(cudaFree(dev_Vb));
+	CUDA_CALL(cudaFree(dev_Vc));
+	CUDA_CALL(cudaFree(dev_Vr));
+	CUDA_CALL(cudaFree(dev_Vidx));
 
-	return err;
+	//std::cout << "malloc time: " << time1 << " ms" << std::endl;
+	//std::cout << "memcpy time: " << time2 << " ms" << std::endl;
+	//std::cout << "partit time: " << time3 << " ms" << std::endl;
+	//std::cout << "sequen time: " << time4 << " ms" << std::endl;
+	//std::cout << "fiinal time: " << time5 << " ms" << std::endl;
+	//std::cout << "rest,, time: " << time7 << " ms" << std::endl;
+	//std::cout << "rescpy time: " << time6 << " ms" << std::endl;
+	//std::cout << "sum time: " << time3 + time4 + time5 + time7 << " ms" << std::endl;
+	//std::cout << "============================" << std::endl;
+
+	// return err;
+	return time3 + time4 + time5 + time7;
 }
 
 void ABM_on_CPU(std::vector<float> a, std::vector<float> b, std::vector<float> c, std::vector<float> &r, int nOfParts) {
@@ -681,17 +707,60 @@ void ReducedMakeTridiag(std::vector<float> y, float h, float d0, float dn, std::
 	if (y.size() % 2 == 0) {
 		eta = -4;
 		tau = 0;
-	} else {
+	}
+	else {
 		eta = 1;
 		tau = 2;
 	}
 	r[r.size() - 1] = mu1 * (y[j + tau] - y[j - 2]) - mu2 * (y[j + 1] - y[j - 1]) - eta * dn;
 }
 
+int cusparseTridiagCompute(cusparseHandle_t handle, std::vector<float> a, std::vector<float> b, std::vector<float> c, std::vector<float> r) {
+	float *dev_a = 0; CUDA_CALL(cudaMalloc((void**)&dev_a, r.size() * sizeof(float)));
+	float *dev_b = 0; CUDA_CALL(cudaMalloc((void**)&dev_b, r.size() * sizeof(float)));
+	float *dev_c = 0; CUDA_CALL(cudaMalloc((void**)&dev_c, r.size() * sizeof(float)));
+	float *dev_r = 0; CUDA_CALL(cudaMalloc((void**)&dev_r, r.size() * sizeof(float)));
+
+	CUDA_CALL(cudaMemcpy(dev_a, &a[0], r.size() * sizeof(float), cudaMemcpyHostToDevice));
+	CUDA_CALL(cudaMemcpy(dev_b, &b[0], r.size() * sizeof(float), cudaMemcpyHostToDevice));
+	CUDA_CALL(cudaMemcpy(dev_c, &c[0], r.size() * sizeof(float), cudaMemcpyHostToDevice));
+	float totalTime = 0;
+	for (int i = 0; i < 100; i++)
+	{
+		std::vector<float> r2(r.size());
+		r2 = r;
+		CUDA_CALL(cudaMemcpy(dev_r, &r2[0], r.size() * sizeof(float), cudaMemcpyHostToDevice));
+
+		cudaEvent_t start, stop;
+		float time = 0.0;
+		cudaEventCreate(&start);
+		cudaEventCreate(&stop);
+
+		cudaEventRecord(start);
+		cudaEventSynchronize(start);
+
+		cusparseSgtsv(handle, a.size(), 1, dev_a, dev_b, dev_c, dev_r, a.size());
+		//cusparseSgtsv_nopivot(handle, a.size(), 1, dev_a, dev_b, dev_c, dev_r, a.size());
+
+		cudaEventRecord(stop);
+		cudaEventSynchronize(stop);
+		cudaEventElapsedTime(&time, start, stop);
+		totalTime += time;
+	}
+
+	printf("CuSparse: %f\n", totalTime/100);
+
+	CUDA_CALL(cudaFree(dev_a));
+	CUDA_CALL(cudaFree(dev_b));
+	CUDA_CALL(cudaFree(dev_c));
+	CUDA_CALL(cudaFree(dev_r));
+	return 0;
+}
+
 // =================================================================================================================================================================== MAIN
 int main()
 {
-	const int matrixSize = 500 * 1024 + 1;
+	const int matrixSize = 6000 * 1024 + 1;
 	std::vector<float> a(matrixSize);
 	std::vector<float> b(matrixSize);
 	std::vector<float> c(matrixSize);
@@ -700,6 +769,7 @@ int main()
 	float x1 = -4000, xr = 4000;
 	std::vector<float> X(matrixSize + 2);
 	std::vector<float> F(matrixSize + 2);
+	std::vector<float> d(matrixSize + 2);
 	std::vector<float> r3((F.size() / 2) - 1);
 	float h = (xr - x1) / (X.size() - 1);
 	// Data X, F:
@@ -721,6 +791,15 @@ int main()
 	cudaEvent_t start_make, stop_makeT, stop_makedB;
 	float timeT = 0.0;
 	float timedB = 0.0;
+
+	cusparseStatus_t status;
+	cusparseHandle_t handle = 0;
+	status = cusparseCreate(&handle);
+	if (status != CUSPARSE_STATUS_SUCCESS) {
+		printf("error creating a handle");
+		return 1;
+	}
+
 	cudaEventCreate(&start_make);
 	cudaEventCreate(&stop_makeT);
 	cudaEventCreate(&stop_makedB);
@@ -789,51 +868,75 @@ int main()
 	cudaEventElapsedTime(&time2, stop_CPU, stop_reduced);
 
 	// computing on GPU
-	cudaError_t cudaStatus = austin_berndt_moulton(a, b, c, r, numberOfThreads, mp);
-	if (cudaStatus != cudaSuccess) {
-		fprintf(stderr, "GPU computing failed!\n");
-		return 1;
+	int iter = 100;
+	float timeABM = 0;
+	for (int i = 0; i < iter; i++)
+	{
+		timeABM += austin_berndt_moulton(d, a, b, c, r, numberOfThreads, mp);
 	}
+	cudaError_t cudaStatus;
+	//cudaError_t cudaStatus = austin_berndt_moulton(a, b, c, r, numberOfThreads, mp);
+	/*if (cudaStatus != cudaSuccess) {
+	fprintf(stderr, "GPU computing failed!\n");
+	return 1;
+	}*/
 
 	cudaEventRecord(stop_GPU);
 	cudaEventSynchronize(stop_GPU);
 	cudaEventElapsedTime(&time3, stop_reduced, stop_GPU);
 
 	// ======================================================================================================================================================== VOLAM METODU GPU REDUCED
-	cudaStatus = ABM_reduced(r4, F, d1, dr, h, numberOfThreads, mp);
-	if (cudaStatus != cudaSuccess) {
-		fprintf(stderr, "GPU computing failed!\n");
-		return 1;
+	float timeABM2 = 0;
+	for (int i = 0; i < iter; i++)
+	{
+		timeABM2 += ABM_reduced(d, r4, F, d1, dr, h, numberOfThreads, mp);
 	}
+	/*cudaStatus = ABM_reduced(r4, F, d1, dr, h, numberOfThreads, mp);
+	if (cudaStatus != cudaSuccess) {
+	fprintf(stderr, "GPU computing failed!\n");
+	return 1;
+	}*/
 
 	cudaEventRecord(stop_GPU_reduced);
 	cudaEventSynchronize(stop_GPU_reduced);
 	cudaEventElapsedTime(&time4, stop_GPU, stop_GPU_reduced);
 
-	std::cout << "redu make time: " << timeT << " ms" << std::endl;
-	std::cout << "full make time: " << timedB << " ms" << std::endl;
-	std::cout << "CPU time: " << time1 << " ms" << std::endl;
-	std::cout << "reduced CPU time: " << time2 << " ms" << std::endl;
-	std::cout << "my GPU time: " << time3 << " ms" << std::endl;
-	std::cout << "reduced GPU time: " << time4 << " ms" << std::endl;
-	std::cout << "normal/reduced: " << time1 / time2 << std::endl << std::endl;
+	//std::cout << "redu make time: " << timeT << " ms" << std::endl;
+	//std::cout << "full make time: " << timedB << " ms" << std::endl;
+	//std::cout << "CPU time: " << time1 << " ms" << std::endl;
+	//std::cout << "reduced CPU time: " << time2 << " ms" << std::endl;
+	//std::cout << "my GPU time: " << time3 << " ms" << std::endl;
+	//std::cout << "reduced GPU time: " << time4 << " ms" << std::endl;
+	//std::cout << "normal/reduced: " << time1 / time2 << std::endl << std::endl;
+	timeABM = timeABM / iter;
+	timeABM2 = timeABM2 / iter;
+	// cusparseTridiagCompute(handle, a, b, c, r);
+	std::cout << "abm: " << timeABM << std::endl;
+	std::cout << "rdc: " << timeABM2 << std::endl;
+	std::cout << "normal/reduced: " << timeABM / timeABM2 << std::endl << std::endl;
 	// std::cout.precision(15);
-	for (int i = 0; i < r.size(); i++)
-	{
-		if (r4[i + 1] != r4[i + 1])
-		{
-			std::cout << "hodnota " << i + 1 << " je " << r3[i + 1] << std::endl;
-		}
-		float diff = abs(r4[i + 1] - r[i]);
-		if (diff > 0.00001) { // 10^-5
-			std::cout << "BACHA! rozdiel v " << i << " je presne " << diff << std::endl;
-		}
-	}
+	//for (int i = 0; i < r.size(); i++)
+	//{
+	//	if (r4[i + 1] != r4[i + 1])
+	//	{
+	//		std::cout << "hodnota " << i + 1 << " je " << r4[i + 1] << std::endl;
+	//	}
+	//	float diff = abs(r4[i + 1] - r[i]);
+	//	if (diff > 0.00001) { // 10^-5
+	//		//std::cout << "BACHA! rozdiel v " << i << " je presne " << diff << std::endl;
+	//	}
+	//}
 	// cudaDeviceReset must be called before exiting in order for profiling and
 	// tracing tools such as Nsight and Visual Profiler to show complete traces.
 	cudaStatus = cudaDeviceReset();
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaDeviceReset failed!");
+		return 1;
+	}
+
+	status = cusparseDestroy(handle);
+	if (status != CUSPARSE_STATUS_SUCCESS) {
+		printf("error destroying a handle");
 		return 1;
 	}
 
