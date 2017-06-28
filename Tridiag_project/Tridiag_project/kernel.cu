@@ -106,7 +106,6 @@ __device__ void LU_tridiag_device(float* a, float* b, float* c, float* r, int fr
 	}
 }
 
-// ================================================================================================================================================================ LU DEVICE EQUIDISTANCNE
 __device__ void LU_tridiag_dev_equi(float* a, float* b, float* r, int from, int to)
 {
 	b[from] = -14;
@@ -261,7 +260,6 @@ __global__ void partitioning(float* a, float* b, float* c, float* r, float* Va, 
 	}
 }
 
-// =============================================================================================================================================================================REDUCED PARTITIONING
 __global__ void partitioning_reduced(float* r, float* Va, float* Vb, float* Vc, float* Vr, int* Vindex, int pLength, int Vsize, int remainder, bool even) {
 	int idx = blockDim.x * blockIdx.x + threadIdx.x;
 	int i = idx * 2 + 1;
@@ -315,7 +313,6 @@ __global__ void partitioning_reduced(float* r, float* Va, float* Vb, float* Vc, 
 	}
 }
 
-// =============================================================================================================================================================================REDUCED FINAL
 __global__ void final_computations_reduced(float* a, float* b, float* r, float* Vr, int* Vindex, int Vsize)
 {
 	int i = (blockDim.x * blockIdx.x + threadIdx.x) * 2;
@@ -370,7 +367,6 @@ __global__ void final_computations(float* a, float* b, float* c, float* r, float
 	}
 }
 
-// ============================================================================================================================================================================= GPU REST
 __global__ void rest_gpu(float* d, float* r, float* y, int Dsize, int Rsize, float d0, float dn, float h) {
 	int i = blockDim.x * blockIdx.x + threadIdx.x;
 	if (i < Rsize)
@@ -403,7 +399,6 @@ std::vector<float> compute_rest(std::vector<float> r, std::vector<float> y, floa
 	return d;
 }
 
-// cudaError_t
 float austin_berndt_moulton(std::vector<float> &d, std::vector<float> a, std::vector<float> b, std::vector<float> c, std::vector<float> &r, int threadsPerBlock, int numberOfMultiprocessors)
 {
 	int nOfParts = numberOfMultiprocessors * threadsPerBlock;
@@ -507,21 +502,9 @@ float austin_berndt_moulton(std::vector<float> &d, std::vector<float> a, std::ve
 	CUDA_CALL(cudaFree(dev_Vr));
 	CUDA_CALL(cudaFree(dev_Vidx));
 
-	//std::cout << "malloc time: " << time1 << " ms" << std::endl;
-	//std::cout << "memcpy time: " << time2 << " ms" << std::endl;
-	//std::cout << "partit time: " << time3 << " ms" << std::endl;
-	//std::cout << "sequen time: " << time4 << " ms" << std::endl;
-	//std::cout << "fiinal time: " << time5 << " ms" << std::endl;
-	//std::cout << "rescpy time: " << time6 << " ms" << std::endl;
-	//std::cout << "sum time: " << time3 + time4 + time5 << " ms" << std::endl;
-	//std::cout << "============================" << std::endl;
-
-	// return err;
 	return time3 + time4 + time5;
 }
 
-// ============================================================================================================================================================================== ABM REDUCED
-// cudaError_t
 float ABM_reduced(std::vector<float> &d, std::vector<float> &r, std::vector<float> &F, float d1, float dr, float h, int threadsPerBlock, int numberOfMultiprocessors)
 {
 	int nOfParts = numberOfMultiprocessors * threadsPerBlock;
@@ -637,17 +620,6 @@ float ABM_reduced(std::vector<float> &d, std::vector<float> &r, std::vector<floa
 	CUDA_CALL(cudaFree(dev_Vr));
 	CUDA_CALL(cudaFree(dev_Vidx));
 
-	//std::cout << "malloc time: " << time1 << " ms" << std::endl;
-	//std::cout << "memcpy time: " << time2 << " ms" << std::endl;
-	//std::cout << "partit time: " << time3 << " ms" << std::endl;
-	//std::cout << "sequen time: " << time4 << " ms" << std::endl;
-	//std::cout << "fiinal time: " << time5 << " ms" << std::endl;
-	//std::cout << "rest,, time: " << time7 << " ms" << std::endl;
-	//std::cout << "rescpy time: " << time6 << " ms" << std::endl;
-	//std::cout << "sum time: " << time3 + time4 + time5 + time7 << " ms" << std::endl;
-	//std::cout << "============================" << std::endl;
-
-	// return err;
 	return time3 + time4 + time5 + time7;
 }
 
@@ -779,7 +751,6 @@ int cusparseTridiagCompute(cusparseHandle_t handle, std::vector<float> a, std::v
 	return 0;
 }
 
-// =================================================================================================================================================================== MAIN
 int main()
 {
 	const int matrixSize = 6000 * 1024 + 1;
@@ -803,7 +774,6 @@ int main()
 		F[i] = sin(X[i]);
 	}
 
-	// =================================================================================================================================================================== VOLAM MAKE TRIDIAG
 	CUDA_CALL(cudaSetDevice(0));
 	cudaDeviceProp deviceProp;
 	cudaGetDeviceProperties(&deviceProp, 0);
@@ -901,7 +871,6 @@ int main()
 	cudaEventSynchronize(stop_GPU);
 	cudaEventElapsedTime(&time3, stop_reduced, stop_GPU);
 
-	// ======================================================================================================================================================== VOLAM METODU GPU REDUCED
 	float timeABM2 = 0;
 	for (int i = 0; i < iter; i++)
 	{
@@ -912,13 +881,6 @@ int main()
 	cudaEventSynchronize(stop_GPU_reduced);
 	cudaEventElapsedTime(&time4, stop_GPU, stop_GPU_reduced);
 
-	//std::cout << "redu make time: " << timeT << " ms" << std::endl;
-	//std::cout << "full make time: " << timedB << " ms" << std::endl;
-	//std::cout << "CPU time: " << time1 << " ms" << std::endl;
-	//std::cout << "reduced CPU time: " << time2 << " ms" << std::endl;
-	//std::cout << "my GPU time: " << time3 << " ms" << std::endl;
-	//std::cout << "reduced GPU time: " << time4 << " ms" << std::endl;
-	//std::cout << "normal/reduced: " << time1 / time2 << std::endl << std::endl;
 	timeABM = timeABM / iter;
 	timeABM2 = timeABM2 / iter;
 
@@ -927,20 +889,7 @@ int main()
 	std::cout << "abm: " << timeABM << std::endl;
 	std::cout << "rdc: " << timeABM2 << std::endl;
 	std::cout << "normal/reduced: " << timeABM / timeABM2 << std::endl << std::endl;
-	// std::cout.precision(15);
-	//for (int i = 0; i < r.size(); i++)
-	//{
-	//	if (r4[i + 1] != r4[i + 1])
-	//	{
-	//		std::cout << "hodnota " << i + 1 << " je " << r4[i + 1] << std::endl;
-	//	}
-	//	float diff = abs(r4[i + 1] - r[i]);
-	//	if (diff > 0.00001) { // 10^-5
-	//		std::cout << "BACHA! rozdiel v " << i << " je presne " << diff << std::endl;
-	//	}
-	//}
-	// cudaDeviceReset must be called before exiting in order for profiling and
-	// tracing tools such as Nsight and Visual Profiler to show complete traces.
+
 	cudaError_t cudaStatus = cudaDeviceReset();
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaDeviceReset failed!");
